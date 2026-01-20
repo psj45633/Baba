@@ -175,7 +175,7 @@ public class PlayerController : MonoBehaviour
                     tb.SyncPosFromWorld(grid);
             }
 
-            if(movedTextThisStep) textRule.SentenceScan();
+            if(movedTextThisStep) textRule.ScanSentence();
 
 
             movingObjects.Clear();
