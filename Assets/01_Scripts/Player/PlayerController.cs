@@ -1,4 +1,4 @@
-using UnityEngine;
+ï»¿using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.Tilemaps;
 using System.Collections.Generic;
@@ -20,21 +20,31 @@ public class PlayerController : MonoBehaviour
     private float nextMoveTime;
 
     private bool isMoving;
+    private bool isReturn;
     private Vector3 targetWorldPos;
 
-    // ÀÌ¹ø ½ºÅÜ¿¡ ¿òÁ÷ÀÏ ¿ÀºêÁ§Æ®µé°ú ¸ñÇ¥µé
+    // ì´ë²ˆ ìŠ¤í…ì— ì›€ì§ì¼ ì˜¤ë¸Œì íŠ¸ë“¤ê³¼ ëª©í‘œë“¤
     private readonly List<Transform> movingObjects = new();
     private readonly List<Vector3> movingTargets = new();
+
+    [SerializeField] private TextRule textRule;
+
+    private bool movedTextThisStep;
 
     private void Awake()
     {
         input = new PlayerInputs();
         actions = input.Player;
 
+        if (!textRule)
+        {
+            textRule = FindFirstObjectByType<TextRule>();
+        }
+
         if (!pushTextController) pushTextController = GetComponent<PushTextController>();
         if (!stageManager) stageManager = FindFirstObjectByType<StageManager>();
 
-        // ½ÃÀÛ À§Ä¡ ½º³À(±×¸®µå Áß¾Ó)
+        // ì‹œì‘ ìœ„ì¹˜ ìŠ¤ëƒ…(ê·¸ë¦¬ë“œ ì¤‘ì•™)
         var grid = pushTextController.Grid;
         var startCell = grid.WorldToCell(transform.position);
         targetWorldPos = grid.GetCellCenterWorld(startCell);
@@ -46,7 +56,8 @@ public class PlayerController : MonoBehaviour
         actions.Enable();
         actions.Movement.performed += OnMove;
         actions.Movement.canceled += OnMove;
-        actions.Return.performed += OnReturn;
+        actions.Return.performed += ctx => isReturn = true;
+        actions.Return.canceled += ctx => isReturn = false;
         actions.Restart.performed += OnRestart;
     }
 
@@ -54,7 +65,8 @@ public class PlayerController : MonoBehaviour
     {
         actions.Movement.performed -= OnMove;
         actions.Movement.canceled -= OnMove;
-        actions.Return.performed -= OnReturn;
+        actions.Return.performed -= ctx => isReturn = true;
+        actions.Return.canceled -= ctx => isReturn = false;
         actions.Restart.performed -= OnRestart;
         actions.Disable();
     }
@@ -63,7 +75,7 @@ public class PlayerController : MonoBehaviour
     {
         Vector2 v = ctx.ReadValue<Vector2>();
 
-        // ´ë°¢¼± ¹æÁö: Å« Ãà¸¸
+        // ëŒ€ê°ì„  ë°©ì§€: í° ì¶•ë§Œ
         if (Mathf.Abs(v.x) > Mathf.Abs(v.y))
             queuedDir = new Vector2Int(v.x > 0 ? 1 : (v.x < 0 ? -1 : 0), 0);
         else
@@ -75,6 +87,13 @@ public class PlayerController : MonoBehaviour
         if (isMoving)
         {
             TickMove();
+            return;
+        }
+
+        if (isReturn && Time.time >= nextMoveTime)
+        {
+            TryReturnStep();
+            nextMoveTime = Time.time + moveCooldown;
             return;
         }
 
@@ -97,21 +116,34 @@ public class PlayerController : MonoBehaviour
 
         if (!ok) return;
 
-        // ÀÌµ¿ È®Á¤µÇ¾úÀ¸´Ï, Undo ÀúÀå
+        movedTextThisStep = ContainsText(movingObjects);
+
+        // ì´ë™ í™•ì •ë˜ì—ˆìœ¼ë‹ˆ, Undo ì €ì¥
         stageManager.SaveBeforeStep(transform.position, movingObjects);
 
-        // ¸ñÇ¥ ¼¼ÆÃ ÈÄ ÀÌµ¿ ½ÃÀÛ
+        // ëª©í‘œ ì„¸íŒ… í›„ ì´ë™ ì‹œì‘
         targetWorldPos = playerTarget;
         isMoving = true;
     }
 
+    private bool ContainsText(List<Transform> list)
+    {
+        for (int i = 0; i < list.Count; i++)
+        {
+            var tr = list[i];
+            if (tr == null) continue;
+            if (tr.GetComponent<TextBlock>() != null) return true;
+        }
+        return false;
+    }
+
     private void TickMove()
     {
-        // ÇÃ·¹ÀÌ¾î ÀÌµ¿
+        // í”Œë ˆì´ì–´ ì´ë™
         transform.position = Vector3.MoveTowards(transform.position, targetWorldPos, moveSpeed * Time.deltaTime);
         bool playerDone = Vector3.Distance(transform.position, targetWorldPos) < 0.001f;
 
-        // ¿ÀºêÁ§Æ® ÀÌµ¿
+        // ì˜¤ë¸Œì íŠ¸ ì´ë™
         bool objectsDone = true;
         for (int i = 0; i < movingObjects.Count; i++)
         {
@@ -127,10 +159,24 @@ public class PlayerController : MonoBehaviour
 
         if (playerDone && objectsDone)
         {
-            // ½º³À ¸¶¹«¸®
+            // ìŠ¤ëƒ… ë§ˆë¬´ë¦¬
             transform.position = targetWorldPos;
             for (int i = 0; i < movingObjects.Count; i++)
                 if (movingObjects[i] != null) movingObjects[i].position = movingTargets[i];
+
+            var grid = pushTextController.Grid;
+            for (int i = 0; i < movingObjects.Count; i++)
+            {
+                var tr = movingObjects[i];
+                if (tr == null) continue;
+
+                var tb = tr.GetComponent<TextBlock>();
+                if (tb != null)
+                    tb.SyncPosFromWorld(grid);
+            }
+
+            if(movedTextThisStep) textRule.SentenceScan();
+
 
             movingObjects.Clear();
             movingTargets.Clear();
@@ -139,13 +185,13 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    private void OnReturn(InputAction.CallbackContext ctx)
+    private void TryReturnStep()
     {
         if (isMoving) return;
 
         if (!stageManager.TryPop(out var state)) return;
 
-        // Returnµµ ºÎµå·´°Ô: ¸ñÇ¥¸¸ ¼¼ÆÃÇÏ°í TickMove·Î º¸³»±â
+        // Returnë„ ë¶€ë“œëŸ½ê²Œ: ëª©í‘œë§Œ ì„¸íŒ…í•˜ê³  TickMoveë¡œ ë³´ë‚´ê¸°
         targetWorldPos = state.playerPos;
 
         movingObjects.Clear();
@@ -167,8 +213,8 @@ public class PlayerController : MonoBehaviour
         stageManager.ClearHistory();
         Debug.Log("Restart");
 
-        // (¼±ÅÃ) ÃÊ±â »óÅÂ·Î µ¹¾Æ°¡±â±îÁö ÇÏ°í ½ÍÀ¸¸é,
-        // StageManager¿¡ CaptureInitialState¸¦ ¾²´Â ¹æ½ÄÀ¸·Î È®ÀåÇÏ¸é µÊ.
+        // (ì„ íƒ) ì´ˆê¸° ìƒíƒœë¡œ ëŒì•„ê°€ê¸°ê¹Œì§€ í•˜ê³  ì‹¶ìœ¼ë©´,
+        // StageManagerì— CaptureInitialStateë¥¼ ì“°ëŠ” ë°©ì‹ìœ¼ë¡œ í™•ì¥í•˜ë©´ ë¨.
     }
 }
 
